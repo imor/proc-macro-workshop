@@ -21,7 +21,7 @@ fn generate_code(input: DeriveInput) -> Result<proc_macro2::TokenStream, syn::Er
 
     let data_struct = get_data_struct(&input.data, &item_ident)?;
     let struct_impl = generate_struct_impl(&item_ident, &builder_ident, data_struct);
-    let builder = generate_builder_struct(&builder_ident, data_struct);
+    let builder = generate_builder_struct(&item_ident, &builder_ident, data_struct);
 
     Ok(quote! {
         #struct_impl
@@ -53,6 +53,7 @@ fn generate_struct_impl(
 }
 
 fn generate_builder_struct(
+    item_ident: &Ident,
     builder_ident: &Ident,
     data_struct: &DataStruct,
 ) -> proc_macro2::TokenStream {
@@ -75,6 +76,32 @@ fn generate_builder_struct(
         }
     });
 
+    let field_set_checks = data_struct.fields.iter().map(|field| {
+        let name = field.ident.as_ref().unwrap();
+        quote! {
+            if self.#name.is_none() {
+                let e = std::string::String::from(std::format!("{} must be set", stringify!(#name))).into();
+                return Err(e);
+            }
+        }
+    });
+
+    let set_fields = data_struct.fields.iter().map(|field| {
+        let name = field.ident.as_ref().unwrap();
+        quote! {
+            #name: self.#name.as_ref().unwrap().clone(),
+        }
+    });
+
+    let build_method = quote! {
+        pub fn build(&mut self) -> Result<#item_ident, std::boxed::Box<dyn std::error::Error>> {
+            #(#field_set_checks)*
+            Ok(#item_ident {
+                #(#set_fields)*
+            })
+        }
+    };
+
     quote! {
         pub struct #builder_ident {
             #(#fields)*
@@ -82,6 +109,7 @@ fn generate_builder_struct(
 
         impl #builder_ident {
             #(#field_mutators)*
+            #build_method
         }
     }
 }
