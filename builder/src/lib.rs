@@ -94,7 +94,7 @@ fn generate_builder_struct(
                 }
             }
         } else if is_vec_type(ty) {
-            if let Some(singular_name) = get_singular_name(&field.attrs) {
+            if let Some(singular_name) = get_singular_name(&field.attrs)? {
                 let underlying_type = get_vec_underlying_type(ty);
                 quote! {
                     fn #singular_name(&mut self, #singular_name: #underlying_type) -> &mut Self {
@@ -231,7 +231,7 @@ impl Parse for Each {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let each: Ident = input.parse()?;
         if each != "each" {
-            return Err(syn::Error::new(each.span(), "this token mush be 'each'"));
+            return Err(syn::Error::new(each.span(), r#"expected `each`"#));
         }
         input.parse::<Token![=]>()?;
         let name: Literal = input.parse()?;
@@ -243,21 +243,18 @@ fn is_vec_type(ty: &Type) -> bool {
     get_vec_underlying_type(ty).is_some()
 }
 
-fn get_singular_name(attrs: &[Attribute]) -> Option<Ident> {
+fn get_singular_name(attrs: &[Attribute]) -> Result<Option<Ident>, syn::Error> {
     for attr in attrs {
         if attr.path().is_ident("builder") {
             if let Meta::List(meta_list) = &attr.meta {
-                let Each { name } = match parse2(meta_list.tokens.clone()) {
-                    Ok(each) => each,
-                    Err(_) => continue,
-                };
+                let Each { name } = parse2(meta_list.tokens.clone())?;
                 //TODO: find a better method of converting a string literal into ident without the surrounding doubel quotes
                 let name_str = name.to_string();
                 let name_str = &name_str[1..name_str.len() - 1];
                 let name_ident = format_ident!("{}", name_str);
-                return Some(name_ident);
+                return Ok(Some(name_ident));
             }
         }
     }
-    None
+    Ok(None)
 }
