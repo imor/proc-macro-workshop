@@ -75,7 +75,7 @@ fn generate_builder_struct(
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
         if is_option_type(ty) {
-            let underlying_type = get_underlying_type(ty);
+            let underlying_type = get_option_underlying_type(ty);
             println!("{:#?}", underlying_type);
             quote! {
                 fn #name(&mut self, #name: #underlying_type) -> &mut Self {
@@ -165,27 +165,16 @@ fn get_data_struct<'a>(data: &'a Data, item_ident: &Ident) -> Result<&'a DataStr
 }
 
 fn is_option_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        let segments = &type_path.path.segments;
-        if segments.len() == 1 {
-            let segment = &segments[0];
-            if let PathArguments::AngleBracketed(_) = segment.arguments {
-                if segment.ident == "Option" {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    get_option_underlying_type(ty).is_some()
 }
 
-fn get_underlying_type(ty: &Type) -> Option<&Type> {
+fn get_option_underlying_type(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty {
         let segments = &type_path.path.segments;
         if segments.len() == 1 {
             let segment = &segments[0];
             if let PathArguments::AngleBracketed(abga) = &segment.arguments {
-                if abga.args.len() == 1 {
+                if abga.args.len() == 1 && segment.ident == "Option" {
                     let arg = &abga.args[0];
                     if let GenericArgument::Type(ty) = arg {
                         return Some(ty);
