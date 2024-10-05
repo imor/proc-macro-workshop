@@ -76,7 +76,7 @@ fn generate_builder_struct(
             }
         } else {
             quote! {
-                #name: Option<#ty>,
+                #name: std::option::Option<#ty>,
             }
         }
     });
@@ -149,7 +149,7 @@ fn generate_builder_struct(
     });
 
     let build_method = quote! {
-        pub fn build(&mut self) -> Result<#item_ident, std::boxed::Box<dyn std::error::Error>> {
+        pub fn build(&mut self) -> std::result::Result<#item_ident, std::boxed::Box<dyn std::error::Error>> {
             #(#field_set_checks)*
             Ok(#item_ident {
                 #(#set_fields)*
