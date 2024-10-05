@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DataStruct, DeriveInput};
+use syn::{parse_macro_input, Data, DataStruct, DeriveInput, GenericArgument, PathArguments, Type};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -60,36 +60,63 @@ fn generate_builder_struct(
     let fields = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
-        quote! {
-            #name: Option<#ty>,
+        if is_option_type(ty) {
+            quote! {
+                #name: #ty,
+            }
+        } else {
+            quote! {
+                #name: Option<#ty>,
+            }
         }
     });
 
     let field_mutators = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
-        quote! {
-            fn #name(&mut self, #name: #ty) -> &mut Self {
-                self.#name = Some(#name);
-                self
+        if is_option_type(ty) {
+            let underlying_type = get_underlying_type(ty);
+            println!("{:#?}", underlying_type);
+            quote! {
+                fn #name(&mut self, #name: #underlying_type) -> &mut Self {
+                    self.#name = Some(#name);
+                    self
+                }
+            }
+        } else {
+            quote! {
+                fn #name(&mut self, #name: #ty) -> &mut Self {
+                    self.#name = Some(#name);
+                    self
+                }
             }
         }
     });
 
     let field_set_checks = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
-        quote! {
-            if self.#name.is_none() {
-                let e = std::string::String::from(std::format!("{} must be set", stringify!(#name))).into();
-                return Err(e);
+        if is_option_type(&field.ty) {
+            quote!{}
+        } else {
+            quote! {
+                if self.#name.is_none() {
+                    let e = std::string::String::from(std::format!("{} must be set", stringify!(#name))).into();
+                    return Err(e);
+                }
             }
         }
     });
 
     let set_fields = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
-        quote! {
-            #name: self.#name.as_ref().unwrap().clone(),
+        if is_option_type(&field.ty) {
+            quote! {
+                #name: self.#name.clone(),
+            }
+        } else {
+            quote! {
+                #name: self.#name.as_ref().unwrap().clone(),
+            }
         }
     });
 
@@ -135,4 +162,38 @@ fn get_data_struct<'a>(data: &'a Data, item_ident: &Ident) -> Result<&'a DataStr
             "#[derive(Builder)] does not work for a union",
         )),
     }
+}
+
+fn is_option_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        let segments = &type_path.path.segments;
+        if segments.len() == 1 {
+            let segment = &segments[0];
+            if let PathArguments::AngleBracketed(_) = segment.arguments {
+                if segment.ident == "Option" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn get_underlying_type(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty {
+        let segments = &type_path.path.segments;
+        if segments.len() == 1 {
+            let segment = &segments[0];
+            if let PathArguments::AngleBracketed(abga) = &segment.arguments {
+                if abga.args.len() == 1 {
+                    let arg = &abga.args[0];
+                    if let GenericArgument::Type(ty) = arg {
+                        return Some(ty);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
