@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput};
+use syn::{parse_macro_input, Data, DataStruct, DeriveInput};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -19,8 +19,9 @@ fn generate_code(input: DeriveInput) -> Result<proc_macro2::TokenStream, syn::Er
     let item_ident = input.ident;
     let builder_ident = format_ident!("{item_ident}Builder");
 
-    let struct_impl = generate_struct_impl(&item_ident, &builder_ident);
-    let builder = generate_builder_struct(&input.data, &item_ident, &builder_ident)?;
+    let data_struct = get_data_struct(&input.data, &item_ident)?;
+    let struct_impl = generate_struct_impl(&item_ident, &builder_ident, data_struct);
+    let builder = generate_builder_struct(&builder_ident, data_struct);
 
     Ok(quote! {
         #struct_impl
@@ -28,15 +29,22 @@ fn generate_code(input: DeriveInput) -> Result<proc_macro2::TokenStream, syn::Er
     })
 }
 
-fn generate_struct_impl(item_ident: &Ident, builder_ident: &Ident) -> proc_macro2::TokenStream {
+fn generate_struct_impl(
+    item_ident: &Ident,
+    builder_ident: &Ident,
+    data_struct: &DataStruct,
+) -> proc_macro2::TokenStream {
+    let field_inits = data_struct.fields.iter().map(|field| {
+        let name = field.ident.as_ref().unwrap();
+        quote! {
+            #name: None,
+        }
+    });
     quote! {
         impl #item_ident {
             pub fn builder() -> #builder_ident {
                 #builder_ident {
-                    executable: None,
-                    args: None,
-                    env: None,
-                    current_dir: None,
+                    #(#field_inits)*
                 }
             }
         }
@@ -44,10 +52,24 @@ fn generate_struct_impl(item_ident: &Ident, builder_ident: &Ident) -> proc_macro
 }
 
 fn generate_builder_struct(
-    data: &Data,
-    item_ident: &Ident,
     builder_ident: &Ident,
-) -> Result<proc_macro2::TokenStream, syn::Error> {
+    data_struct: &DataStruct,
+) -> proc_macro2::TokenStream {
+    let fields = data_struct.fields.iter().map(|field| {
+        let name = field.ident.as_ref().unwrap();
+        let ty = &field.ty;
+        quote! {
+            #name: Option<#ty>,
+        }
+    });
+    quote! {
+        pub struct #builder_ident {
+            #(#fields)*
+        }
+    }
+}
+
+fn get_data_struct<'a>(data: &'a Data, item_ident: &Ident) -> Result<&'a DataStruct, syn::Error> {
     match data {
         Data::Struct(data_struct) => {
             let is_tuple_struct = data_struct.fields.iter().any(|f| f.ident.is_none());
@@ -57,18 +79,7 @@ fn generate_builder_struct(
                     "#[derive(Builder)] does not work for a tuple struct",
                 ));
             }
-            let fields = data_struct.fields.iter().map(|field| {
-                let name = field.ident.as_ref().unwrap();
-                let ty = &field.ty;
-                quote! {
-                    #name: Option<#ty>,
-                }
-            });
-            Ok(quote! {
-                pub struct #builder_ident {
-                    #(#fields)*
-                }
-            })
+            Ok(data_struct)
         }
         Data::Enum(_) => Err(syn::Error::new(
             item_ident.span(),
