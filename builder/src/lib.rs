@@ -1,9 +1,12 @@
 use proc_macro::TokenStream;
-use proc_macro2::Ident;
+use proc_macro2::{Ident, Literal};
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DataStruct, DeriveInput, GenericArgument, PathArguments, Type};
+use syn::{
+    parse::Parse, parse2, parse_macro_input, Attribute, Data, DataStruct, DeriveInput,
+    GenericArgument, Meta, PathArguments, Token, Type,
+};
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -21,7 +24,7 @@ fn generate_code(input: DeriveInput) -> Result<proc_macro2::TokenStream, syn::Er
 
     let data_struct = get_data_struct(&input.data, &item_ident)?;
     let struct_impl = generate_struct_impl(&item_ident, &builder_ident, data_struct);
-    let builder = generate_builder_struct(&item_ident, &builder_ident, data_struct);
+    let builder = generate_builder_struct(&item_ident, &builder_ident, data_struct)?;
 
     Ok(quote! {
         #struct_impl
@@ -36,8 +39,15 @@ fn generate_struct_impl(
 ) -> proc_macro2::TokenStream {
     let field_inits = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
-        quote! {
-            #name: None,
+        let ty = &field.ty;
+        if is_vec_type(ty) {
+            quote! {
+                #name: vec![],
+            }
+        } else {
+            quote! {
+                #name: None,
+            }
         }
     });
 
@@ -56,11 +66,11 @@ fn generate_builder_struct(
     item_ident: &Ident,
     builder_ident: &Ident,
     data_struct: &DataStruct,
-) -> proc_macro2::TokenStream {
+) -> Result<proc_macro2::TokenStream, syn::Error> {
     let fields = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
-        if is_option_type(ty) {
+        if is_option_type(ty) || is_vec_type(ty) {
             quote! {
                 #name: #ty,
             }
@@ -71,16 +81,33 @@ fn generate_builder_struct(
         }
     });
 
-    let field_mutators = data_struct.fields.iter().map(|field| {
+    let mut field_mutators = vec![];
+    for field in &data_struct.fields {
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
-        if is_option_type(ty) {
+        let mutator = if is_option_type(ty) {
             let underlying_type = get_option_underlying_type(ty);
-            println!("{:#?}", underlying_type);
             quote! {
                 fn #name(&mut self, #name: #underlying_type) -> &mut Self {
                     self.#name = Some(#name);
                     self
+                }
+            }
+        } else if is_vec_type(ty) {
+            if let Some(singular_name) = get_singular_name(&field.attrs) {
+                let underlying_type = get_vec_underlying_type(ty);
+                quote! {
+                    fn #singular_name(&mut self, #singular_name: #underlying_type) -> &mut Self {
+                        self.#name.push(#singular_name);
+                        self
+                    }
+                }
+            } else {
+                quote! {
+                    fn #name(&mut self, #name: #ty) -> &mut Self {
+                        self.#name = #name;
+                        self
+                    }
                 }
             }
         } else {
@@ -90,12 +117,13 @@ fn generate_builder_struct(
                     self
                 }
             }
-        }
-    });
+        };
+        field_mutators.push(mutator);
+    }
 
     let field_set_checks = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
-        if is_option_type(&field.ty) {
+        if is_option_type(&field.ty) || is_vec_type(&field.ty) {
             quote!{}
         } else {
             quote! {
@@ -109,7 +137,7 @@ fn generate_builder_struct(
 
     let set_fields = data_struct.fields.iter().map(|field| {
         let name = field.ident.as_ref().unwrap();
-        if is_option_type(&field.ty) {
+        if is_option_type(&field.ty) || is_vec_type(&field.ty) {
             quote! {
                 #name: self.#name.clone(),
             }
@@ -129,7 +157,7 @@ fn generate_builder_struct(
         }
     };
 
-    quote! {
+    Ok(quote! {
         pub struct #builder_ident {
             #(#fields)*
         }
@@ -138,7 +166,7 @@ fn generate_builder_struct(
             #(#field_mutators)*
             #build_method
         }
-    }
+    })
 }
 
 fn get_data_struct<'a>(data: &'a Data, item_ident: &Ident) -> Result<&'a DataStruct, syn::Error> {
@@ -169,12 +197,20 @@ fn is_option_type(ty: &Type) -> bool {
 }
 
 fn get_option_underlying_type(ty: &Type) -> Option<&Type> {
+    get_underlying_type(ty, "Option")
+}
+
+fn get_vec_underlying_type(ty: &Type) -> Option<&Type> {
+    get_underlying_type(ty, "Vec")
+}
+
+fn get_underlying_type<'t>(ty: &'t Type, type_name: &str) -> Option<&'t Type> {
     if let Type::Path(type_path) = ty {
         let segments = &type_path.path.segments;
         if segments.len() == 1 {
             let segment = &segments[0];
             if let PathArguments::AngleBracketed(abga) = &segment.arguments {
-                if abga.args.len() == 1 && segment.ident == "Option" {
+                if abga.args.len() == 1 && segment.ident == type_name {
                     let arg = &abga.args[0];
                     if let GenericArgument::Type(ty) = arg {
                         return Some(ty);
@@ -184,5 +220,44 @@ fn get_option_underlying_type(ty: &Type) -> Option<&Type> {
         }
     }
 
+    None
+}
+
+struct Each {
+    name: Literal,
+}
+
+impl Parse for Each {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let each: Ident = input.parse()?;
+        if each != "each" {
+            return Err(syn::Error::new(each.span(), "this token mush be 'each'"));
+        }
+        input.parse::<Token![=]>()?;
+        let name: Literal = input.parse()?;
+        Ok(Each { name })
+    }
+}
+
+fn is_vec_type(ty: &Type) -> bool {
+    get_vec_underlying_type(ty).is_some()
+}
+
+fn get_singular_name(attrs: &[Attribute]) -> Option<Ident> {
+    for attr in attrs {
+        if attr.path().is_ident("builder") {
+            if let Meta::List(meta_list) = &attr.meta {
+                let Each { name } = match parse2(meta_list.tokens.clone()) {
+                    Ok(each) => each,
+                    Err(_) => continue,
+                };
+                //TODO: find a better method of converting a string literal into ident without the surrounding doubel quotes
+                let name_str = name.to_string();
+                let name_str = &name_str[1..name_str.len() - 1];
+                let name_ident = format_ident!("{}", name_str);
+                return Some(name_ident);
+            }
+        }
+    }
     None
 }
