@@ -57,14 +57,13 @@ fn generate_builder_struct(
                     "#[derive(Builder)] does not work for a tuple struct",
                 ));
             }
-            let mut fields = Vec::with_capacity(data_struct.fields.len());
-            for field in &data_struct.fields {
+            let fields = data_struct.fields.iter().map(|field| {
                 let name = field.ident.as_ref().unwrap();
                 let ty = &field.ty;
-                fields.push(quote! {
+                quote! {
                     #name: Option<#ty>,
-                });
-            }
+                }
+            });
             Ok(quote! {
                 pub struct #builder_ident {
                     #(#fields)*
