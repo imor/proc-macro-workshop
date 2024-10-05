@@ -40,6 +40,7 @@ fn generate_struct_impl(
             #name: None,
         }
     });
+
     quote! {
         impl #item_ident {
             pub fn builder() -> #builder_ident {
@@ -62,9 +63,25 @@ fn generate_builder_struct(
             #name: Option<#ty>,
         }
     });
+
+    let field_mutators = data_struct.fields.iter().map(|field| {
+        let name = field.ident.as_ref().unwrap();
+        let ty = &field.ty;
+        quote! {
+            fn #name(&mut self, #name: #ty) -> &mut Self {
+                self.#name = Some(#name);
+                self
+            }
+        }
+    });
+
     quote! {
         pub struct #builder_ident {
             #(#fields)*
+        }
+
+        impl #builder_ident {
+            #(#field_mutators)*
         }
     }
 }
