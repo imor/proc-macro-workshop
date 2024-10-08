@@ -6,25 +6,15 @@
 // To run the code:
 //     $ cargo run
 
-use derive_builder::Builder;
+use sorted::sorted;
 
-#[derive(Builder)]
-pub struct Command {
-    pub executable: String,
-    #[builder(each = "arg")]
-    pub args: Vec<String>,
-    pub env: Vec<String>,
-    pub current_dir: Option<String>,
+#[sorted]
+pub enum Conference {
+    RustBeltRust,
+    RustConf,
+    RustFest,
+    RustLatam,
+    RustRush,
 }
 
-fn main() {
-    let command = Command::builder()
-        .executable("cargo".to_owned())
-        .arg("build".to_owned())
-        .arg("--release".to_owned())
-        .build()
-        .unwrap();
-
-    assert_eq!(command.executable, "cargo");
-    assert_eq!(command.args, vec!["build", "--release"]);
-}
+fn main() {}
