@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::ToTokens;
-use syn::parse2;
+use syn::{parse2, Error, Item, Result};
 
 type Ast = syn::Item;
 
@@ -18,6 +19,13 @@ pub fn sorted(args: TokenStream, input: TokenStream) -> TokenStream {
     ast.to_token_stream().into()
 }
 
-fn parse(input: proc_macro2::TokenStream) -> syn::Result<Ast> {
-    parse2(input)
+fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
+    let item = parse2(input)?;
+    let Item::Enum(_) = item else {
+        return Err(Error::new(
+            Span::call_site(),
+            "expected enum or match expression",
+        ));
+    };
+    Ok(item)
 }
