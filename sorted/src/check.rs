@@ -1,5 +1,8 @@
 use quote::{quote, ToTokens};
-use syn::{parse2, visit_mut::VisitMut, Arm, Attribute, Error, ExprMatch, Pat, Path, Result};
+use syn::{
+    parse2, spanned::Spanned, visit_mut::VisitMut, Arm, Attribute, Error, ExprMatch, Pat, Path,
+    Result,
+};
 
 pub fn check_impl(input: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
     let item_fn = parse(input)?;
@@ -38,7 +41,6 @@ impl VisitMut for SortedAttrStripper {
         let mut prev_paths = vec![];
         for arm in &node.arms {
             if let Some(path) = get_arm_path(arm) {
-                println!("Some path");
                 let curr_path = arm_path_to_string(&path);
                 for prev_path in &prev_paths {
                     if curr_path < *prev_path {
@@ -51,7 +53,7 @@ impl VisitMut for SortedAttrStripper {
                 }
                 prev_paths.push(curr_path);
             } else {
-                println!("Not a path");
+                self.report_error(Error::new(arm.pat.span(), "unsupported by #[sorted]"));
             }
         }
     }
