@@ -1,7 +1,7 @@
 use quote::{quote, ToTokens};
 use syn::{
-    parse2, spanned::Spanned, visit_mut::VisitMut, Arm, Attribute, Error, ExprMatch, Pat, Path,
-    Result,
+    parse2, spanned::Spanned, visit_mut::VisitMut, Arm, Attribute, Error, ExprMatch, Pat, PatIdent,
+    Path, Result,
 };
 
 pub fn check_impl(input: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
@@ -39,8 +39,16 @@ impl VisitMut for SortedAttrStripper {
         }
 
         let mut prev_paths = vec![];
-        for arm in &node.arms {
-            if let Some(path) = get_arm_path(arm) {
+        for (i, arm) in node.arms.iter().enumerate() {
+            let (is_wild, path) = get_arm_path(arm);
+            if is_wild {
+                if i == node.arms.len() - 1 {
+                    continue;
+                } else {
+                    self.report_error(Error::new(arm.pat.span(), "_ should sort at the end"));
+                }
+            }
+            if let Some(path) = path {
                 let curr_path = arm_path_to_string(&path);
                 for prev_path in &prev_paths {
                     if curr_path < *prev_path {
@@ -67,12 +75,13 @@ fn is_sorted_attr(attr: &Attribute) -> bool {
     attr.meta.path().is_ident("sorted")
 }
 
-fn get_arm_path(arm: &Arm) -> Option<Path> {
-    println!("PAT: {:#?}", arm.pat);
+fn get_arm_path(arm: &Arm) -> (bool, Option<Path>) {
     match arm.pat {
-        Pat::TupleStruct(ref p) => Some(p.path.clone()),
-        Pat::Path(ref p) => Some(p.path.clone()),
-        _ => None,
+        Pat::TupleStruct(ref p) => (false, Some(p.path.clone())),
+        Pat::Path(ref p) => (false, Some(p.path.clone())),
+        Pat::Ident(PatIdent { ident: ref p, .. }) => (false, Some(p.clone().into())),
+        Pat::Wild(_) => (true, None),
+        _ => (false, None),
     }
 }
 
