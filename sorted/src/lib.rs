@@ -1,5 +1,4 @@
 use proc_macro2::Span;
-use quote::ToTokens;
 use syn::{
     parse2, punctuated::Punctuated, spanned::Spanned, token::Comma, Error, Item, Result, Variant,
 };
@@ -9,27 +8,30 @@ pub fn sorted(
     _args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
+    let mut out = input.clone();
     match sorted_impl(input.into()) {
-        Ok(res) => res,
-        Err(e) => e.into_compile_error(),
+        Ok(()) => out,
+        Err(e) => {
+            out.extend(proc_macro::TokenStream::from(e.into_compile_error()));
+            out
+        }
     }
-    .into()
 }
 
-fn sorted_impl(input: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
+fn sorted_impl(input: proc_macro2::TokenStream) -> Result<()> {
     let item = parse(input)?;
-    let item = analyze(item)?;
-    Ok(item.to_token_stream())
+    analyze(item)?;
+    Ok(())
 }
 
-fn analyze(item: Item) -> Result<Item> {
+fn analyze(item: Item) -> Result<()> {
     let Item::Enum(item_enum) = item.clone() else {
         unreachable!()
     };
 
     check_sorting(&item_enum.variants)?;
 
-    Ok(item)
+    Ok(())
 }
 
 fn check_sorting(variants: &Punctuated<Variant, Comma>) -> Result<()> {
