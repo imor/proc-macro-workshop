@@ -26,7 +26,7 @@ pub fn check(
 ) -> proc_macro::TokenStream {
     let mut out = input.clone();
     match check_impl(input.into()) {
-        Ok(()) => out,
+        Ok(item_fn) => item_fn.into(),
         Err(e) => {
             out.extend(proc_macro::TokenStream::from(e.into_compile_error()));
             out
