@@ -1,11 +1,13 @@
+use proc_macro2::Span;
 use quote::quote;
 use syn::{
     parse2, parse_quote,
     punctuated::Punctuated,
     spanned::Spanned,
-    token::{Colon, Where},
+    token::{Colon, PathSep, Where},
     Attribute, Data, DeriveInput, Expr, GenericArgument, GenericParam, Generics, Ident, Lit, Meta,
-    PathArguments, PredicateType, Result, Type, WhereClause, WherePredicate,
+    Path, PathArguments, PathSegment, PredicateType, Result, Type, TypePath, WhereClause,
+    WherePredicate,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -17,10 +19,11 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     };
 
-    match generate_code(ast) {
+    let res = match generate_code(ast) {
         Ok(stream) => stream.into(),
         Err(e) => e.into_compile_error().into(),
-    }
+    };
+    res
 }
 
 #[derive(Debug)]
@@ -34,6 +37,7 @@ struct Ast {
     fields: Vec<Field>,
     name: proc_macro2::Ident,
     generics: Generics,
+    attrs: Vec<Attribute>,
 }
 
 fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
@@ -67,6 +71,7 @@ fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
         fields,
         name: derive_input.ident,
         generics: derive_input.generics,
+        attrs: derive_input.attrs,
     })
 }
 
@@ -105,7 +110,9 @@ fn get_format_str(attrs: &[Attribute]) -> Result<Option<String>> {
 
 fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
     let name = ast.name;
-    let generics = add_generic_trait_bounds(ast.generics, &ast.fields);
+    let ehb = get_escape_hatch_bound(&ast.attrs);
+    let enable_bound_inference = ehb.is_none();
+    let generics = add_generic_trait_bounds(ast.generics, &ast.fields, enable_bound_inference);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let wc = where_clause.cloned();
     let preds = get_assoc_type_where_clause_preds(&ast.fields);
@@ -118,7 +125,18 @@ fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
             predicates: Punctuated::default(),
         }
     };
-    wc.predicates.extend(preds);
+
+    if let Some(ehb) = ehb {
+        let pred = WherePredicate::Type(PredicateType {
+            lifetimes: None,
+            bounded_ty: ehb,
+            colon_token: Colon::default(),
+            bounds: parse_quote!(std::fmt::Debug),
+        });
+        wc.predicates.push(pred);
+    } else {
+        wc.predicates.extend(preds);
+    }
 
     let fields = ast.fields.iter().map(|f| {
         let field_name = &f.ident;
@@ -142,7 +160,14 @@ fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
     Ok(code)
 }
 
-fn add_generic_trait_bounds(mut generics: Generics, fields: &[Field]) -> Generics {
+fn add_generic_trait_bounds(
+    mut generics: Generics,
+    fields: &[Field],
+    enable_bound_inference: bool,
+) -> Generics {
+    if !enable_bound_inference {
+        return generics;
+    }
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut tp) = *param {
             let mut generate_bound = true;
@@ -206,4 +231,62 @@ fn get_assoc_type_where_clause_preds(fields: &[Field]) -> Vec<WherePredicate> {
         }
     }
     res
+}
+
+fn get_escape_hatch_bound(attrs: &[Attribute]) -> Option<Type> {
+    for attr in attrs {
+        if let Meta::List(ml) = &attr.meta {
+            if !ml.path.segments.is_empty() && ml.path.segments.first().unwrap().ident == "debug" {
+                let mut tts = ml.tokens.clone().into_iter();
+                let tt = tts.next();
+                if let Some(proc_macro2::TokenTree::Ident(i)) = tt {
+                    if i != "bound" {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+
+                let tt = tts.next();
+                if let Some(proc_macro2::TokenTree::Punct(p)) = tt {
+                    if p.as_char() != '=' {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+
+                let tt = tts.next();
+                if let Some(proc_macro2::TokenTree::Literal(l)) = tt {
+                    let s = String::from(l.to_string().trim_matches('"'));
+                    let tokens = s.split("::");
+                    let mut tokens_vec = vec![];
+                    for token in tokens {
+                        tokens_vec.push(token);
+                    }
+                    let len = tokens_vec.len();
+                    let mut segments = Punctuated::new();
+                    for (i, token) in tokens_vec.into_iter().enumerate() {
+                        let path_seg = PathSegment::from(Ident::new(token, Span::call_site()));
+                        segments.push(path_seg);
+
+                        if i < len - 1 {
+                            segments.push_punct(PathSep::default());
+                        }
+                    }
+                    let t = Type::Path(TypePath {
+                        qself: None,
+                        path: Path {
+                            leading_colon: None,
+                            segments,
+                        },
+                    });
+                    return Some(t);
+                } else {
+                    continue;
+                }
+            }
+        }
+    }
+    None
 }
