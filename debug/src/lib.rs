@@ -26,9 +26,16 @@ fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
     let Data::Struct(data_struct) = derive_input.data else {
         return Err(syn::Error::new(
             derive_input.ident.span(),
-            "only structs supported currently",
+            "#[derive(CustomDebug) supports structs only",
         ));
     };
+    let is_tuple_struct = data_struct.fields.iter().any(|f| f.ident.is_none());
+    if is_tuple_struct {
+        return Err(syn::Error::new(
+            derive_input.ident.span(),
+            "#[derive(CustomDebug)] does not work for a tuple struct",
+        ));
+    }
     Ok(Ast {
         data_struct,
         name: derive_input.ident,
