@@ -6,15 +6,12 @@
 // To run the code:
 //     $ cargo run
 
-use sorted::sorted;
+use derive_debug::CustomDebug;
 
-#[sorted]
-pub enum Conference {
-    RustBeltRust,
-    RustConf,
-    RustFest,
-    RustLatam,
-    RustRush,
+#[derive(CustomDebug)]
+pub struct Field {
+    name: &'static str,
+    bitmask: u16,
 }
 
 fn main() {}
