@@ -1,7 +1,7 @@
 use quote::quote;
 use syn::{
-    parse2, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput, Expr, GenericParam,
-    Generics, Lit, Meta, Result,
+    parse2, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput, Expr, GenericArgument,
+    GenericParam, Generics, Ident, Lit, Meta, PathArguments, Result, Type,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -19,9 +19,11 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
 }
 
+#[derive(Debug)]
 struct Field {
     ident: proc_macro2::Ident,
     format: Option<String>,
+    ty: Type,
 }
 
 struct Ast {
@@ -53,6 +55,7 @@ fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
         fields.push(Field {
             ident: field.ident.clone().unwrap(),
             format: get_format_str(&field.attrs)?,
+            ty: field.ty.clone(),
         });
     }
 
@@ -96,10 +99,10 @@ fn get_format_str(attrs: &[Attribute]) -> Result<Option<String>> {
     Ok(res)
 }
 
-fn generate_code(mut ast: Ast) -> Result<proc_macro2::TokenStream> {
+fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
     let name = ast.name;
-    add_generic_trait_bounds(&mut ast.generics);
-    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let generics = add_generic_trait_bounds(ast.generics, &ast.fields);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let fields = ast.fields.iter().map(|f| {
         let field_name = &f.ident;
@@ -123,10 +126,40 @@ fn generate_code(mut ast: Ast) -> Result<proc_macro2::TokenStream> {
     Ok(code)
 }
 
-fn add_generic_trait_bounds(generics: &mut Generics) {
+fn add_generic_trait_bounds(mut generics: Generics, fields: &[Field]) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut tp) = *param {
-            tp.bounds.push(parse_quote!(std::fmt::Debug));
+            let mut generate_bound = true;
+            for field in fields {
+                if phantom_data_uses_generic(field, &tp.ident) {
+                    generate_bound = false;
+                    break;
+                }
+            }
+
+            if generate_bound {
+                tp.bounds.push(parse_quote!(std::fmt::Debug));
+            }
         }
     }
+    generics
+}
+
+fn phantom_data_uses_generic(field: &Field, param: &Ident) -> bool {
+    if let Type::Path(tp) = &field.ty {
+        for segment in &tp.path.segments {
+            if segment.ident == "PhantomData" {
+                if let PathArguments::AngleBracketed(abga) = &segment.arguments {
+                    for arg in &abga.args {
+                        if let GenericArgument::Type(Type::Path(p)) = arg {
+                            if p.path.is_ident(param) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
 }
