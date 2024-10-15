@@ -19,11 +19,10 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     };
 
-    let res = match generate_code(ast) {
+    match generate_code(ast) {
         Ok(stream) => stream.into(),
         Err(e) => e.into_compile_error().into(),
-    };
-    res
+    }
 }
 
 #[derive(Debug)]
