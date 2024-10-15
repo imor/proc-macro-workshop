@@ -1,5 +1,8 @@
 use quote::quote;
-use syn::{parse2, spanned::Spanned, Attribute, Data, DeriveInput, Expr, Lit, Meta, Result};
+use syn::{
+    parse2, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput, Expr, GenericParam,
+    Generics, Lit, Meta, Result,
+};
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -24,6 +27,7 @@ struct Field {
 struct Ast {
     fields: Vec<Field>,
     name: proc_macro2::Ident,
+    generics: Generics,
 }
 
 fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
@@ -55,6 +59,7 @@ fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
     Ok(Ast {
         fields,
         name: derive_input.ident,
+        generics: derive_input.generics,
     })
 }
 
@@ -91,8 +96,10 @@ fn get_format_str(attrs: &[Attribute]) -> Result<Option<String>> {
     Ok(res)
 }
 
-fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
+fn generate_code(mut ast: Ast) -> Result<proc_macro2::TokenStream> {
     let name = ast.name;
+    add_generic_trait_bounds(&mut ast.generics);
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
 
     let fields = ast.fields.iter().map(|f| {
         let field_name = &f.ident;
@@ -105,7 +112,7 @@ fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
     });
 
     let code = quote! {
-        impl std::fmt::Debug for #name {
+        impl #impl_generics std::fmt::Debug for #name #ty_generics #where_clause {
             fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 fmt.debug_struct(stringify!(#name))
                     #(#fields)*
@@ -114,4 +121,12 @@ fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
         }
     };
     Ok(code)
+}
+
+fn add_generic_trait_bounds(generics: &mut Generics) {
+    for param in &mut generics.params {
+        if let GenericParam::Type(ref mut tp) = *param {
+            tp.bounds.push(parse_quote!(std::fmt::Debug));
+        }
+    }
 }
