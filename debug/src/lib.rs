@@ -1,36 +1,44 @@
 use quote::quote;
-use syn::{parse2, Data, DeriveInput, Result};
+use syn::{parse2, Data, DataStruct, DeriveInput, Result};
 
 #[proc_macro_derive(CustomDebug)]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = match parse(input.into()) {
+    let ast = match parse(input.into()) {
         Ok(input) => input,
         Err(e) => {
             return e.into_compile_error().into();
         }
     };
 
-    match generate_code(input) {
+    match generate_code(ast) {
         Ok(stream) => stream.into(),
         Err(e) => e.into_compile_error().into(),
     }
 }
 
-fn parse(input: proc_macro2::TokenStream) -> Result<DeriveInput> {
-    let derive_input = parse2(input)?;
-    Ok(derive_input)
+struct Ast {
+    data_struct: DataStruct,
+    name: proc_macro2::Ident,
 }
 
-fn generate_code(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
-    let name = input.ident;
-    let Data::Struct(data_struct) = input.data else {
+fn parse(input: proc_macro2::TokenStream) -> Result<Ast> {
+    let derive_input: DeriveInput = parse2(input)?;
+    let Data::Struct(data_struct) = derive_input.data else {
         return Err(syn::Error::new(
-            name.span(),
+            derive_input.ident.span(),
             "only structs supported currently",
         ));
     };
+    Ok(Ast {
+        data_struct,
+        name: derive_input.ident,
+    })
+}
 
-    let fields = data_struct.fields.iter().map(|f| {
+fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
+    let name = ast.name;
+
+    let fields = ast.data_struct.fields.iter().map(|f| {
         let field_name = f.ident.clone().unwrap();
         quote! { .field(stringify!(#field_name), &self.#field_name) }
     });
