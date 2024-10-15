@@ -1,7 +1,11 @@
 use quote::quote;
 use syn::{
-    parse2, parse_quote, spanned::Spanned, Attribute, Data, DeriveInput, Expr, GenericArgument,
-    GenericParam, Generics, Ident, Lit, Meta, PathArguments, Result, Type,
+    parse2, parse_quote,
+    punctuated::Punctuated,
+    spanned::Spanned,
+    token::{Colon, Where},
+    Attribute, Data, DeriveInput, Expr, GenericArgument, GenericParam, Generics, Ident, Lit, Meta,
+    PathArguments, PredicateType, Result, Type, WhereClause, WherePredicate,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -103,6 +107,18 @@ fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
     let name = ast.name;
     let generics = add_generic_trait_bounds(ast.generics, &ast.fields);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let wc = where_clause.cloned();
+    let preds = get_assoc_type_where_clause_preds(&ast.fields);
+
+    let mut wc = if let Some(wc) = wc {
+        wc
+    } else {
+        WhereClause {
+            where_token: Where::default(),
+            predicates: Punctuated::default(),
+        }
+    };
+    wc.predicates.extend(preds);
 
     let fields = ast.fields.iter().map(|f| {
         let field_name = &f.ident;
@@ -115,7 +131,7 @@ fn generate_code(ast: Ast) -> Result<proc_macro2::TokenStream> {
     });
 
     let code = quote! {
-        impl #impl_generics std::fmt::Debug for #name #ty_generics #where_clause {
+        impl #impl_generics std::fmt::Debug for #name #ty_generics #wc {
             fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 fmt.debug_struct(stringify!(#name))
                     #(#fields)*
@@ -131,7 +147,7 @@ fn add_generic_trait_bounds(mut generics: Generics, fields: &[Field]) -> Generic
         if let GenericParam::Type(ref mut tp) = *param {
             let mut generate_bound = true;
             for field in fields {
-                if phantom_data_uses_generic(field, &tp.ident) {
+                if omit_bound(field, &tp.ident) {
                     generate_bound = false;
                     break;
                 }
@@ -145,16 +161,19 @@ fn add_generic_trait_bounds(mut generics: Generics, fields: &[Field]) -> Generic
     generics
 }
 
-fn phantom_data_uses_generic(field: &Field, param: &Ident) -> bool {
+fn omit_bound(field: &Field, param: &Ident) -> bool {
     if let Type::Path(tp) = &field.ty {
         for segment in &tp.path.segments {
-            if segment.ident == "PhantomData" {
-                if let PathArguments::AngleBracketed(abga) = &segment.arguments {
-                    for arg in &abga.args {
-                        if let GenericArgument::Type(Type::Path(p)) = arg {
-                            if p.path.is_ident(param) {
-                                return true;
-                            }
+            if let PathArguments::AngleBracketed(abga) = &segment.arguments {
+                for arg in &abga.args {
+                    if let GenericArgument::Type(Type::Path(p)) = arg {
+                        if p.path.segments.len() > 1
+                            && p.path.segments.first().unwrap().ident == *param
+                        {
+                            return true;
+                        }
+                        if p.path.is_ident(param) && segment.ident == "PhantomData" {
+                            return true;
                         }
                     }
                 }
@@ -162,4 +181,29 @@ fn phantom_data_uses_generic(field: &Field, param: &Ident) -> bool {
         }
     }
     false
+}
+
+fn get_assoc_type_where_clause_preds(fields: &[Field]) -> Vec<WherePredicate> {
+    let mut res = vec![];
+    for field in fields {
+        if let Type::Path(tp) = &field.ty {
+            for segment in &tp.path.segments {
+                if let PathArguments::AngleBracketed(abga) = &segment.arguments {
+                    for arg in &abga.args {
+                        if let GenericArgument::Type(Type::Path(p)) = arg {
+                            if p.path.segments.len() > 1 {
+                                res.push(WherePredicate::Type(PredicateType {
+                                    lifetimes: None,
+                                    bounded_ty: parse_quote!(T::Value),
+                                    colon_token: Colon::default(),
+                                    bounds: parse_quote!(std::fmt::Debug),
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    res
 }
